@@ -44,8 +44,13 @@ def index_to_position(index: Index, strides: Strides) -> int:
         Position in storage
 
     """
-    # TODO: Implement for Task 2.1.
-    raise NotImplementedError("Need to implement for Task 2.1")
+    position = 0
+    for i, stride in zip(index, strides):
+        # Handle negative indices (Python-style indexing)
+        if i < 0:
+            i += stride  # Adjust negative index based on stride size
+        position += i * stride
+    return position
 
 
 def to_index(ordinal: int, shape: Shape, out_index: OutIndex) -> None:
@@ -60,8 +65,9 @@ def to_index(ordinal: int, shape: Shape, out_index: OutIndex) -> None:
         out_index : return index corresponding to position.
 
     """
-    # TODO: Implement for Task 2.1.
-    raise NotImplementedError("Need to implement for Task 2.1")
+    for i in reversed(range(len(shape))):  # Work backwards from the last dimension
+        out_index[i] = ordinal % shape[i]
+        ordinal //= shape[i]
 
 
 def broadcast_index(
@@ -83,8 +89,13 @@ def broadcast_index(
         None
 
     """
-    # TODO: Implement for Task 2.2.
-    raise NotImplementedError("Need to implement for Task 2.2")
+    # Align both shapes by padding smaller shape with leading 1s
+    offset = len(big_shape) - len(shape)
+    for i in range(len(shape)):
+        if shape[i] == 1:
+            out_index[i] = 0  # Broadcasted dimensions always index at 0
+        else:
+            out_index[i] = big_index[i + offset]
 
 
 def shape_broadcast(shape1: UserShape, shape2: UserShape) -> UserShape:
@@ -101,8 +112,22 @@ def shape_broadcast(shape1: UserShape, shape2: UserShape) -> UserShape:
         IndexingError : if cannot broadcast
 
     """
-    # TODO: Implement for Task 2.2.
-    raise NotImplementedError("Need to implement for Task 2.2")
+    # Start from the rightmost dimension and broadcast each pair
+    result = []
+    len1, len2 = len(shape1), len(shape2)
+    max_len = max(len1, len2)
+
+    # Iterate from the last dimension towards the first
+    for i in range(1, max_len + 1):
+        dim1 = shape1[-i] if i <= len1 else 1
+        dim2 = shape2[-i] if i <= len2 else 1
+
+        if dim1 == 1 or dim2 == 1 or dim1 == dim2:
+            result.append(max(dim1, dim2))
+        else:
+            raise IndexingError(f"Cannot broadcast dimensions {dim1} and {dim2}")
+
+    return tuple(reversed(result))
 
 
 def strides_from_shape(shape: UserShape) -> UserStrides:
@@ -145,7 +170,7 @@ class TensorData:
         self._shape = array(shape)
         self.strides = strides
         self.dims = len(strides)
-        self.size = int(prod(shape))
+        self.size = int(prod(shape))  # type: ignore
         self.shape = shape
         assert len(self._storage) == self.size
 
@@ -168,50 +193,78 @@ class TensorData:
             last = stride
         return True
 
-    @staticmethod
-    def shape_broadcast(shape_a: UserShape, shape_b: UserShape) -> UserShape:
-        return shape_broadcast(shape_a, shape_b)
+    # @staticmethod
+    # def shape_broadcast(shape_a: UserShape, shape_b: UserShape) -> UserShape:
+    #     return shape_broadcast(shape_a, shape_b)
 
     def index(self, index: Union[int, UserIndex]) -> int:
+        """Calculate the flat index for a given multi-dimensional index.
+
+        Args:
+            index (Union[int, UserIndex]): The multi-dimensional index or a single integer index.
+
+        Returns:
+            int: The flat index in the storage.
+
+        Raises:
+            IndexingError: If the index is not valid for the tensor shape.
+
+        """
         if isinstance(index, int):
             aindex: Index = array([index])
-        else:  # if isinstance(index, tuple):
+        else:
             aindex = array(index)
 
-        # Pretend 0-dim shape is 1-dim shape of singleton
         shape = self.shape
-        if len(shape) == 0 and len(aindex) != 0:
-            shape = (1,)
 
-        # Check for errors
+        # Special case: handle 0-dimensional (scalar) tensors
+        if len(shape) == 0:
+            if (len(aindex) == 1 and aindex[0] == 0) or len(aindex) == 0:
+                return 0
+            else:
+                raise IndexingError(f"Index {aindex} is not valid for a scalar tensor.")
+
+        # Check for dimension mismatch
         if aindex.shape[0] != len(self.shape):
             raise IndexingError(f"Index {aindex} must be size of {self.shape}.")
-        for i, ind in enumerate(aindex):
-            if ind >= self.shape[i]:
-                raise IndexingError(f"Index {aindex} out of range {self.shape}.")
-            if ind < 0:
-                raise IndexingError(f"Negative indexing for {aindex} not supported.")
 
-        # Call fast indexing.
-        return index_to_position(array(index), self._strides)
+        # Check for out-of-bounds index values
+        for dim_idx, (idx, dim_size) in enumerate(zip(aindex, self.shape)):
+            if idx < 0 or idx >= dim_size:
+                raise IndexingError(
+                    f"Index {idx} is out of bounds for dimension {dim_idx} with size {dim_size}."
+                )
+
+        # Compute the flat index using the strides
+        return sum(aindex[i] * self.strides[i] for i in range(len(aindex)))
 
     def indices(self) -> Iterable[UserIndex]:
+        """Yields all possible indices for the tensor shape."""
         lshape: Shape = array(self.shape)
-        out_index: Index = array(self.shape)
-        for i in range(self.size):
-            to_index(i, lshape, out_index)
-            yield tuple(out_index)
+        out_index: Index = array([0] * len(self.shape))  # Initialize to all zeroes
+
+        for ordinal in range(self.size):  # Iterate over all possible indices
+            to_index(ordinal, lshape, out_index)
+            yield tuple(out_index)  # Yield the tuple of the current index
 
     def sample(self) -> UserIndex:
         """Get a random valid index"""
         return tuple((random.randint(0, s - 1) for s in self.shape))
 
     def get(self, key: UserIndex) -> float:
+        """Retrieve the value at the specified index."""
         x: float = self._storage[self.index(key)]
         return x
 
     def set(self, key: UserIndex, val: float) -> None:
+        """Set the value at the specified index."""
         self._storage[self.index(key)] = val
+
+    def fill(self, value: float) -> None:
+        """Fill the storage of the tensor with the specified value."""
+        for idx in range(self.size):
+            # Directly set the value in the storage using the flat index
+            self._storage[idx] = value
 
     def tuple(self) -> Tuple[Storage, Shape, Strides]:
         """Return core tensor data as a tuple."""
@@ -231,8 +284,9 @@ class TensorData:
             range(len(self.shape))
         ), f"Must give a position to each dimension. Shape: {self.shape} Order: {order}"
 
-        # TODO: Implement for Task 2.1.
-        raise NotImplementedError("Need to implement for Task 2.1")
+        new_shape = tuple(self.shape[i] for i in order)
+        new_strides = tuple(self.strides[i] for i in order)
+        return TensorData(self._storage, new_shape, new_strides)
 
     def to_string(self) -> str:
         """Convert to string"""

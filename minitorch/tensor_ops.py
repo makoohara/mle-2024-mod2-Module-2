@@ -7,7 +7,6 @@ from typing_extensions import Protocol
 
 from . import operators
 from .tensor_data import (
-    MAX_DIMS,
     broadcast_index,
     index_to_position,
     shape_broadcast,
@@ -16,7 +15,7 @@ from .tensor_data import (
 
 if TYPE_CHECKING:
     from .tensor import Tensor
-    from .tensor_data import Index, Shape, Storage, Strides
+    from .tensor_data import Shape, Storage, Strides
 
 
 class MapProto(Protocol):
@@ -41,7 +40,9 @@ class TensorOps:
     @staticmethod
     def reduce(
         fn: Callable[[float, float], float], start: float = 0.0
-    ) -> Callable[[Tensor, int], Tensor]: ...
+    ) -> Callable[[Tensor, int], Tensor]: 
+        """Create a reduce operation for a tensor along a specified dimension."""
+        ...
 
     @staticmethod
     def matrix_multiply(a: Tensor, b: Tensor) -> Tensor:
@@ -179,26 +180,14 @@ class SimpleOps(TensorOps):
     def reduce(
         fn: Callable[[float, float], float], start: float = 0.0
     ) -> Callable[["Tensor", int], "Tensor"]:
-        """Higher-order tensor reduce function. ::
-
-          fn_reduce = reduce(fn)
-          out = fn_reduce(a, dim)
-
-        Simple version ::
-
-            for j:
-                out[1, j] = start
-                for i:
-                    out[1, j] = fn(out[1, j], a[i, j])
-
+        """Perform a reduction over a tensor along a specified dimension.
 
         Args:
-            fn: function from two floats-to-float to apply
-            a (:class:`TensorData`): tensor to reduce over
-            dim (int): int of dim to reduce
+            fn: A binary function to apply during reduction.
+            start: Initial value for the reduction.
 
         Returns:
-            :class:`TensorData` : new tensor
+            A tensor with the specified dimension reduced.
 
         """
         f = tensor_reduce(fn)
@@ -218,8 +207,30 @@ class SimpleOps(TensorOps):
 
     @staticmethod
     def matrix_multiply(a: "Tensor", b: "Tensor") -> "Tensor":
-        """Matrix multiplication"""
-        raise NotImplementedError("Not implemented in this assignment")
+        """Matrix multiplication implementation using low-level operations."""
+        # Ensure shapes are compatible for matrix multiplication
+        assert (
+            a.shape[-1] == b.shape[-2]
+        ), "Matrix shapes are not aligned for multiplication."
+
+        # Dimensions of result matrix
+        m, n = a.shape[-2], a.shape[-1]  # Shape of 'a' is (m, n)
+        p = b.shape[-1]  # Shape of 'b' is (n, p)
+        result_shape = (m, p)
+
+        # Initialize an output tensor filled with zeros
+        result = a.zeros(result_shape)
+
+        # Compute matrix multiplication
+        for i in range(m):
+            for j in range(p):
+                # Calculate the dot product of the i-th row of 'a' and the j-th column of 'b'
+                sum_value = 0.0
+                for k in range(n):
+                    sum_value += a[i, k] * b[k, j]
+                result[i, j] = sum_value
+
+        return result
 
     is_cuda = False
 
@@ -261,8 +272,14 @@ def tensor_map(
         in_shape: Shape,
         in_strides: Strides,
     ) -> None:
-        # TODO: Implement for Task 2.3.
-        raise NotImplementedError("Need to implement for Task 2.3")
+        for idx in range(int(operators.prod(list(out_shape)))):
+            out_index = np.zeros(len(out_shape), dtype=np.int32)
+            in_index = np.zeros(len(in_shape), dtype=np.int32)
+            to_index(idx, out_shape, out_index)
+            broadcast_index(out_index, out_shape, in_shape, in_index)
+            out_pos = index_to_position(out_index, out_strides)
+            in_pos = index_to_position(in_index, in_strides)
+            out[out_pos] = fn(in_storage[in_pos])
 
     return _map
 
@@ -306,8 +323,17 @@ def tensor_zip(
         b_shape: Shape,
         b_strides: Strides,
     ) -> None:
-        # TODO: Implement for Task 2.3.
-        raise NotImplementedError("Need to implement for Task 2.3")
+        for idx in range(int(operators.prod(list(out_shape)))):
+            out_index = np.zeros(len(out_shape), dtype=np.int32)
+            a_index = np.zeros(len(a_shape), dtype=np.int32)
+            b_index = np.zeros(len(b_shape), dtype=np.int32)
+            to_index(idx, out_shape, out_index)
+            broadcast_index(out_index, out_shape, a_shape, a_index)
+            broadcast_index(out_index, out_shape, b_shape, b_index)
+            out_pos = index_to_position(out_index, out_strides)
+            a_pos = index_to_position(a_index, a_strides)
+            b_pos = index_to_position(b_index, b_strides)
+            out[out_pos] = fn(a_storage[a_pos], b_storage[b_pos])
 
     return _zip
 
@@ -337,8 +363,16 @@ def tensor_reduce(
         a_strides: Strides,
         reduce_dim: int,
     ) -> None:
-        # TODO: Implement for Task 2.3.
-        raise NotImplementedError("Need to implement for Task 2.3")
+        for idx in range(int(operators.prod(list(out_shape)))):
+            out_index = np.zeros(len(out_shape), dtype=np.int32)
+            to_index(idx, out_shape, out_index)
+            out_pos = index_to_position(out_index, out_strides)
+
+            for j in range(a_shape[reduce_dim]):
+                in_index = np.copy(out_index)
+                in_index[reduce_dim] = j
+                in_pos = index_to_position(in_index, a_strides)
+                out[out_pos] = fn(out[out_pos], a_storage[in_pos])
 
     return _reduce
 
